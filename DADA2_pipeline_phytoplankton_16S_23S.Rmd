@@ -1,0 +1,344 @@
+---
+title: "DADA2 pipeline with MiSeq dataset (16S and 23S rRNA) for lake phytoplankton metabarcoding"
+author: "Benjamin Alric"
+date: "`r Sys.Date()`"
+header-includes:
+  - \usepackage{color, fancyvrb}
+output:
+  rmdformats::readthedown:
+    highlight: tango
+    number_section: yes
+    css: custom1.css
+---
+
+```{r setup, include = FALSE}
+## Global options
+options(max.print = "100")
+knitr::opts_chunk$set(echo = TRUE,
+               eval = FALSE,
+	             cache = TRUE,
+               prompt = FALSE,
+               tidy = TRUE,
+               comment = NA,
+               message = FALSE,
+               warning = FALSE)
+knitr::opts_knit$set(width = 100)
+library(DiagrammeR)
+```
+
+# Aims
+In this repository, you will find a tutorial explaining how we processed metabarcoding data (rRNA 16S v3-V4 region, and rRNA 23S UPA region) to report on the genetic diversity of phytoplankton communities in four French peri-alpine lakes (i.e., Geneva, Boourget, Annecy and Aiguebelette).
+
+The objective was to generate tables of amplicon sequence variants (i.e. ASVs) to study the spatio-temporal dynamics of phytoplankton communities.
+
+For this, we used a pipeline based on the [DADA2 suite](https://www.nature.com/articles/nmeth.3869) as implemented in [R](https://benjjneb.github.io/dada2/dada-installation.html).
+
+# Overview of our bioinformatic pipeline
+The pipeline is composed to three steps according to the following workflow.
+```{r, eval = TRUE, echo = FALSE}
+DiagrammeR::mermaid("
+graph TD
+A(FastQ sequencing R1 and R2 files) --> B(Step 1 - Filtering and Trimming)
+B --> C(FWD and REV primer trimmed sequence for each sample)
+C --> D(Step 2 - DADA2: Filtration and length trimming, denoising and merging, chimera detection and ASV table construction)
+D --> E(Amplicon Sequence Variants)
+E --> F(Step 3 - Taxonomic assignment)
+style A fill:#d9e6eb,stroke:#333333,stroke-width:2px
+style B fill:#FD7446FF,stroke:#333333,stroke-width:2px
+style C fill:#d9e6eb,stroke:#333333,stroke-width:2px
+style D fill:#FD7446FF,stroke:#333333,stroke-width:2px
+style E fill:#d9e6eb,stroke:#333333,stroke-width:2px
+style F fill:#FD7446FF,stroke:#333333,stroke-width:2px
+", height = 600)
+```
+# Step 1 - Filtering and Trimming
+## Data demultiplexing
+**DADA2** pipeline requires one FASTQ file per sample (or two FASTQ files, one forward (FWD) and one reverse (REV) per sample). Demultiplexing refers to the step of processing where tags are used to find out which sequences came from which samples after they have all been sequenced together.
+
+If there are two FASTQ files (one forward, and one reverse) per sample, then demultiplexing has already been done.
+<br/>That was the case for samples of peri-alpine lakes.
+
+## Primer trimming
+After demultiplexing, primers were trimmed using Cutadapt v2.8 ([Martin, 2011](https://journal.embnet.org/index.php/embnetjournal/article/view/200)).
+<br/>Installing cutadapt on ([Windows](https://cutadapt.readthedocs.io/en/stable/installation.html#installation-on-windows)).
+<br/>Caution: to run cutadapt from Windows the lines of code calling the system may change, consider using the ones below in the chunk ("designed for windows")
+
+## In practice
+Load required packages
+```{r, eval = FALSE}
+library(dada2)
+library(ShortRead)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+```
+Define paths were the FASTQ files are located or will be gathered after each steps
+```{r, eval = FALSE}
+## Clean the environment / remove everything
+rm(list = ls())
+# Path to the raw data
+path <- "<path to raw data (FASTQ)>"
+## List of the files present in the path
+list.files(path)
+## Path to the data once the primers were detected and removed
+path_cut <- "<path to raw data which have been processed by cutadapt>"
+if(!dir.exists(path_cut)) dir.create(path_cut)
+## Path to the data after filtration of the reads
+path_filt <- "<path to data after being processed by filterAndTrim command (reads filtering)>"
+if(!dir.exists(path_filt)) dir.create(path_filt)
+## Create a directory to keep a sum up of the different steps done
+path_sum <- "<path to the folder which gathers overview of each bioinformatic steps>"
+if(!dir.exists(path_sum)) dir.create(path_sum)
+## Create a directory for final outputs of the pipeline
+path_results <- "<path to the folder which gathers final outputs>"
+if(!dir.exists(path_results)) dir.create(path_results)
+```
+Use the following script to specify primers specific to 16S rRNA (Nübel et al. 1997. AEM, 63: 3327-3332, https://doi.org/10.1128/aem.63.8.3327-3332.1997)
+```{r, eval = FALSE}
+## Load primers couples
+# CYA359F Forward primer
+Fwd <- "GGGGAATYTTCCGCAATGGG"
+Fwd_RC <- dada2::rc(Fwd)
+# CYA781Rd Reverse primer
+Rv <- "GACTACWGGGGTATCTAATCCCWTT"
+Rv_RC <- dada2::rc(Rv)
+```
+Or use the following script to specify primers specific to 23S rRNA (Canino et al. 2023. MBMG, in prep.)
+```{r, eval = FALSE}
+## Load primers couples
+# 23S_UPA Forward primer
+Fwd <- "ACAGWAAGACCCTATGAAGCTT"
+Fwd_RC <- dada2::rc(Fwd)
+# 23S_UPA Reverse primer
+Rv <- "CCTGTTATCCCTAGAGTAACTT"
+Rv_RC <- dada2::rc(Rv)
+```
+To perform this first step, used the following sript for 16S data:
+```{r, eval = FALSE}
+## Assign different names to forward and reverse corresponding FASTQ files and extract samples names
+raw_F_reads <- sort(list.files(path, pattern="_R1.fastq.gz", full.names = TRUE))
+raw_R_reads <- sort(list.files(path, pattern="_R2.fastq.gz", full.names = TRUE))
+## Prepare arguments of the command
+# Outputs (data with primers removed)
+cut_F_reads <- file.path(path_cut, basename(raw_F_reads))
+cut_R_reads <- file.path(path_cut, basename(raw_R_reads))
+# Arguments for primers detection (see Cutadapt website)
+R1_flags <- paste(paste("-g", Fwd, collapse = " "), paste("-a", Rv_RC, collapse = " "))
+R2_flags <- paste(paste("-G", Rv, collapse = " "), paste("-A", Fwd_RC, collapse = " "))
+# Cutadapt command
+cutadapt <- "cutadapt" # Path to the executable
+for(i in seq_along(raw_F_reads)) {
+  cat("Processing", "-----------", i, "/", length(raw_F_reads), "-----------\n")
+  system2(cutadapt, args = c(R1_flags, R2_flags,
+                             "--discard-untrimmed",
+                             "--max-n 0",
+                             "-o", cut_F_reads[i], "-p", cut_R_reads[i],
+                             raw_F_reads[i], raw_R_reads[i]))
+}
+```
+Or used the following sript for 23S data:
+```{r, eval = FALSE}
+
+```
+Gathering output information into a ‘Synthesis-like’ table
+```{r, eval = FALSE}
+## Count number of reads before and after cutadapt command
+out_R1 <- cbind(ShortRead::qa(raw_F_reads)[["readCounts"]][, "read", drop = FALSE],
+               ShortRead::qa(cut_F_reads)[["readCounts"]][, "read", drop = FALSE])
+out_R2 <- cbind(ShortRead::qa(raw_R_reads)[["readCounts"]][, "read", drop = FALSE],
+               ShortRead::qa(cut_R_reads)[["readCounts"]][, "read", drop = FALSE])
+## Create and fill table with first outputs
+SynthTab <- rbind.data.frame(out_R1, out_R2)
+colnames(SynthTab)[1:2] <- c("raw", "cut")
+SynthTab$samples <- sapply(rownames(SynthTab), FUN = function(x) strsplit(x, split = "_")[[1]][1])
+SynthTab$reads <- sapply(rownames(SynthTab), FUN = function(x) { 
+  substr(strsplit(x,split = ".fastq")[[1]][1], nchar(strsplit(x, split = ".fastq")[[1]][1]) - 1, nchar(strsplit(x, split = ".fastq")[[1]][1]))
+  })
+## Reorder
+SynthTab <- SynthTab[, c(3, 4, 1, 2)]
+```
+# Step 2 - DADA2: Filtration and length trimming, denoising and merging, chimera detection and ASV table construction
+**DAD2** pipeline is consisted of a series of steps to filter raw sequences obtained through Illumina sequencing (here MiSeq). The starting point of the **DADA2** pipeline is a set of demultiplexed FASTQ files corresponding to the samples in our amplicon sequencing study. That is, **DADA2** expects there to be an individual fastq file for each sample (or two fastq files, one forward and one reverse for each sample).
+
+Once demultiplexed FASTQ files without non-biological nucleotides are in hand (see Step 1), the **DADA2** pipeline proceeds in eight steps as follow:
+<br/>- Step 2.1: Inspect read quality profiles
+<br/>- Step 2.2: Filtering and trimming
+<br/>- Step 2.3: Learn error rates
+<br/>- Step 2.4: Dereplicate
+<br/>- Step 2.5: Infer sample composition
+<br/>- Step 2.6: Merge paired reads
+<br/>- Step 2.7: Make sequence table
+<br/>- Step 2.8: Remove chimeras
+
+The output of pipeline is a table of ASVs with rows corresponding to samples and columns to amplicon. In this table, the value of each entry is the number of times ASV was observed in that sample. This table is analogous to the traditional OTU table, except at higher resolution, i.e. exact amplicon sequence variants rather than (usually 97%) clusters of sequencing reads.
+
+## Inspect read quality profiles (step 2.1)
+It is important to get a feel for the quality of the data that we are using. To do this, we will plot the quality of samples. These plots summarize the quality of the reads and they allow us to define where the quality of the sequences falls.
+
+Plots are generated using the following script:
+```{r, eval = FALSE}
+## Have a quick look only at the 2 first ones to have an idea
+plotQualityProfile(cut_F_reads[1:2])
+plotQualityProfile(cut_R_reads[1:2])
+## To get the quality profiles from all the reads (from all the samples) in PDF doc
+pdf(file.path(path_sum, "Read_quality_profile_aggregated.pdf"))
+  p <- plotQualityProfile(sample(cut_F_reads, replace = FALSE,
+                            size = ifelse(length(cut_F_reads) < 100, length(cut_F_reads), 100)),
+                     aggregate = TRUE)
+  p + ggplot2::labs(title = "Forward")
+  p <- plotQualityProfile(sample(cut_R_reads, replace = FALSE,
+                            size = ifelse(length(cut_R_reads) < 100, length(cut_R_reads), 100)),
+                     aggregate = TRUE)
+  p + ggplot2::labs(title = "Reverse")
+dev.off()
+```
+Based on these profiles, we truncated the forward reads and the reverse reads at the position 220 and 220 respectively.
+<br/>We are not cutting more to conserve enough length to allow the overlap between the mix-orientated reads.
+
+## Parameters of the DADA2 pipeline
+The inspection of read quality profiles allows to estimate parameters, need for the following steps of the **DADA2** pipeline (i.e. step 2.2 to 2.8), which are stored in the following table:
+
+<span style="color:#000000">Table 3: Preview of the parameters for the SOMLIT-Astan station</span>
+```{r, echo = FALSE, eval = TRUE, results = 'asis'}
+tabl <- "
+| variable      | value |
+|---------------|-------|
+| TRUNC_FWD     | 220   |
+| TRUNC_REV     | 220   |
+| MAXEE         | 2     |
+| MIN_READ_NUM  | 1000  |
+"
+cat(tabl) # output the table in a format good for HTML/PDF/docx conversion
+```
+
+## Filtering and trimming (Step 2.2)
+In sequence data, low-quality sequences can contain unexpected and misleading errors, and Illumina sequencing quality tends to drop off at the end of reads. Therefore, a step of filtering and trimming is necessary.
+```{r, eval = FALSE}
+## Extract sample names, assuming filenames have format: SAMPLENAME_XXX.fastq
+sample_names <- sapply(strsplit(basename(raw_F_reads),"_"), function(x) x[1])
+## Create names for output files
+filt_F_reads <- file.path(path_filt, basename(raw_F_reads))
+filt_R_reads <- file.path(path_filt, basename(raw_R_reads))
+## Assign names to samples
+names(filt_F_reads) <- sample_names
+names(filt_R_reads) <- sample_names
+## To merge our reads together with a sufficient overlapping length ()
+out_2 <- filterAndTrim(cut_F_reads, filt_F_reads, cut_R_reads, filt_R_reads,
+                       truncLen = c(220,220), maxN = 0, maxEE = c(2,2), truncQ = 2,
+                       rm.phix = TRUE, compress = TRUE, multithread = TRUE)
+outFilt <- rbind(ShortRead::qa(filt_F_reads)[["readCounts"]][, "read", drop = FALSE],
+               ShortRead::qa(filt_R_reads)[["readCounts"]][, "read", drop = FALSE])
+## Add info to the synthesis table and reformat it
+SynthTab <- merge(SynthTab,outFilt, by = 0)
+rownames(SynthTab) <- SynthTab[, 1]
+SynthTab <- SynthTab[, -1]
+colnames(SynthTab)[5] <- "filtered"
+```
+
+## Learn error rates (step 2.3)
+Errors can be introduced by PCR amplification and sequencing. Therefore, error rates must be estimate from a learning process in which a subset of our data as a training set. 
+
+```{r, eval = FALSE}
+## set seed to ensure that randomized steps are replicable
+set.seed(100)
+## Learn forward error rates
+error_F <- learnErrors(filt_F_reads, multithread = TRUE, randomize = TRUE)
+## Learn reverse error rates
+error_R <- learnErrors(filt_R_reads, multithread = TRUE, randomize = TRUE)
+## To save the error rates estimations in a PDF doc
+pdf(file.path(path_sum, "Error_rates_learning.pdf"))
+  p <- plotErrors(error_F, nominalQ = TRUE)
+  p + ggplot2::labs(title = "Error Forward")
+  p <- plotErrors(error_R, nominalQ = TRUE)
+  p + ggplot2::labs(title = "Error Reverse")
+dev.off()
+```
+
+## Denoising, and merging (steps 2.4 to 2.7)
+After estimating the error rates, each sample was then dereplicated, i.e. strictly identical reads were merged using the function `derepFastq()`. This step allows to condense the data and significantly reduce subsequent computation times.
+After dereplication of each sample, the core algorithm of **DADA2** is applied.
+```{r, eval = FALSE}
+## Here we work with list, with samples as elements, containing their relative outputs
+dada_F_reads <- list()
+dada_R_reads <- list()
+merged_reads <- list()
+SynthTab$uniq <- NA
+for (r in 1:length(sample_names)){
+  cat("Processing (", r, "/", length(sample_names), ") :", sample_names[r], "\n")
+  # Dereplication step
+  derepF_tmp <- derepFastq(filt_F_reads[r], verbose = 1) 
+  derepR_tmp <- derepFastq(filt_R_reads[r], verbose = 1)
+  # Sample inference (denoising)
+  dada_F_reads[[sample_names[r]]] <- dada(derepF_tmp, err = error_F, multithread = TRUE, verbose = 1)  
+  dada_R_reads[[sample_names[r]]] <- dada(derepR_tmp, err = error_R, multithread = TRUE, verbose = 1)
+  # Merging the reads together
+  merged_reads[[sample_names[r]]] <- mergePairs(dadaF = dada_F_reads[[sample_names[r]]],
+                                                derepF = derepF_tmp,
+                                                dadaR = dada_R_reads[[sample_names[r]]],
+                                                derepR = derepR_tmp, verbose = 1)
+  # To fill synthesis table
+  SynthTab[which(grepl(sample_names[r], SynthTab$samples) & SynthTab$reads == "R1"), "uniq"] <- length(derepF_tmp$uniques)
+  SynthTab[which(grepl(sample_names[r], SynthTab$samples) & SynthTab$reads == "R2"), "uniq"] <- length(derepR_tmp$uniques)
+}
+## Keep ASV with a given overlapping length
+for (i in 1:length(merged_reads)) {
+  merged_reads[[i]] <- merged_reads[[i]] %>% filter(nmatch > 35 & nmatch < 45)
+}
+## Create from the list the sequence table
+seqtab <- makeSequenceTable(merged_reads)
+## Add infos to the synthesis table and reformat it
+SynthTab$merged <- NA
+for (i in sample_names){
+  SynthTab[which(grepl(i, SynthTab$samples)), "merged"] <- nrow(merged_reads[[i]])
+}
+```
+
+## Remove Chimeras (step 2.8)
+Although **DADA2** has searched for indel errors and substitutions, there may still be chimeric sequences in our dataset that are another important source of spurious sequences in amplicon sequencing. Therefore, the last step before building the ASV table is to remove chimeras.
+
+Chimeras are sequences that are derived from forward and reverse sequences from two different organisms becoming fused together during PCR and/or sequencing. To identify chimeras, we search for rare sequences variants that can be reconstructed by combining left-hand and right-hand segments from two more abundant "parent" sequences.
+```{r, eval = FALSE}
+seqtab.nochim <- removeBimeraDenovo(seqtab, method = "consensus", multithread = TRUE, verbose = TRUE)
+## never stop being curious
+dim(seqtab.nochim) # number of samples * number of ASV (- chimera)
+table(nchar(getSequences(seqtab))) # length distribution of the ASV (- chimera)
+sum(seqtab.nochim) / sum(seqtab) * 100 # % of kept ASV to have an idea of the chimera proportion
+## Add infos to the synthesis table and reformat it
+SynthTab$no_chimera <- NA
+for (i in sample_names){
+  SynthTab[which(grepl(i, SynthTab$samples)), "no_chimera"] <- length(which(seqtab.nochim[i, ] > 0))
+}
+```
+# Step 3 - Taxonomic assignment
+At this stage, we have the ASV table which is the final product of the **DADA2** pipeline. In this ASV table each row corresponds to a processed sample, and each column corresponds to a sequence variant. But, the sequences variants are not yet annotated, i.e. assigning a taxonomy to the sequence variants. 
+
+To assign a taxonomy to the phylogenetic marker-gene 16S v3-V4, we used the native implementation of the [naive Bayesian classifer method](https://aem.asm.org/content/73/16/5261.long) provides by the library `dada2`.
+<br/>The **phytool database** is used to annotate the ASV table.
+```{bash}
+## Get Phytool 16S reference library at: https://github-carrtel.shinyapps.io/phytool_v2/
+# add a "_" instead of a space between the genus and species name, otherwise DADA2 assignation will only give a genus name
+cat Phytool_complete_rRNA_16S_2023-02-15.fasta | tr "[:blank:]" "_" > Phytool_16S.fa
+```
+
+```{r, eval = FALSE}
+## Get Phytool 16S reference library at: https://github-carrtel.shinyapps.io/phytool_v2/
+
+## Assigning ASV to taxonomy
+tax <- assignTaxonomy(seqtab.nochim,
+                      "Phytool_16S.fa",
+                      minBoot = 75,
+                      taxLevels = c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Genus_species"),
+                      outputBootstraps = TRUE, verbose = TRUE, multithread = TRUE)
+## Save taxonomyassigned ASV table
+save(tax, file = paste0(pathSeq, "DADA2_ASV_taxa_phytool.rda"))
+```
+
+# Version of packages used to build this document
+```{r, eval = TRUE, echo = FALSE}
+library(dada2)
+library(ShortRead)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+sessionInfo()
+```
