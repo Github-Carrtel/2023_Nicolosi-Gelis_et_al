@@ -1,0 +1,44 @@
+#sidebar {
+     color: #D9AB16;
+     background: #EFC000FF;
+}
+
+#sidebar h2 {
+    color: #FFFFFF;
+    background-color: #003C67FF;
+}
+
+#sidebar a {
+    color: #3F4548;
+}
+
+#sidebar a:hover {
+    background-color: #3F4548;
+    color: #FF00FF;
+}
+
+#postamble {
+     background: #003C67FF;
+     border-top:solid 10px #EFC000FF;
+}
+
+.title {
+     text-align: left;
+     color: #003C67FF;
+     font-size: 50px;
+}
+
+h1 {
+     color: #EFC000FF;
+     font-size: 30px;
+}
+
+h2 {
+     color: #EFC000FF;
+     font-size: 20px;
+     font-style: italic;
+}
+
+##content h2 {
+#     background-color: #003C67FF;
+#}
