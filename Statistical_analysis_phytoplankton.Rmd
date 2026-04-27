@@ -1,0 +1,164 @@
+---
+title: "Statistical analyzes to compare metabarcoding and microscopy data for lake phytoplankton"
+author: "Benjamin Alric"
+date: "`r Sys.Date()`"
+header-includes:
+  - \usepackage{color, fancyvrb}
+output:
+  rmdformats::readthedown:
+    highlight: tango
+    number_section: yes
+    css: custom2.css
+---
+
+```{r setup, include = FALSE}
+## Global options
+options(max.print = "100")
+knitr::opts_chunk$set(echo = TRUE,
+               eval = FALSE,
+	             cache = TRUE,
+               prompt = FALSE,
+               tidy = TRUE,
+               comment = NA,
+               message = FALSE,
+               warning = FALSE)
+knitr::opts_knit$set(width = 100)
+library(DiagrammeR)
+```
+
+# Aims
+In this repository, you will find a tutorial explaining the analyzes performed to compare metabarcoding and microscopy data for phytoplankton monitoring in peri-alpine lakes.
+
+# Load required packages
+```{r, eval = FALSE}
+library(ade4)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(ggplot2)
+```
+# Loading data files
+```{r, eval = FALSE}
+## Microscopy data
+Micro <- read.table("OLA_samples_microscopy_relative_abundances.csv", sep = ";", header = TRUE)
+testMicro <- t(Micro %>% select(AIG0121:LEM1821))
+colnames(testMicro) <- Micro$Genus_species
+testMicro <-as.data.frame(testMicro)
+## Assigned data
+Mol16S <- read.table("OLA_samples_16S_asigned.csv", sep = ";", header = TRUE)
+testMol16s <- t(Mol16S %>% select(AIG0121:LEM1821))
+colnames(testMol16s) <- Mol16S$Genus_species
+testMol16s <-as.data.frame(testMol16s)
+Mol23S <- read.table("OLA_samples_23S_asigned.csv", sep = ";", header = TRUE)
+testMol23s <- t(Mol23S %>% select(AIG0121:LEM1821))
+colnames(testMol23s) <- Mol23S$Genus_species
+testMol23s <-as.data.frame(testMol23s)
+## Taxonomic-free data
+Mol16S_TF <- read.table("OLA_taxonomic_free_16S.csv", sep = ";", header = TRUE)
+# Convert reads number in relative abundances:
+for (i in c(2:ncol(Mol16S_TF))) {
+  Mol16S_TF[,i] <- Mol16S_TF[,i]/sum(Mol16S_TF[,i], na.rm = T)*100
+}
+testMol16S_TF <- t(Mol16S_TF %>% select(AIG0121:LEM1821))
+colnames(testMol16S_TF) <- Mol16S_TF$X
+testMol16S_TF <-as.data.frame(testMol16S_TF)
+Mol23S_TF <- read.table("OLA_taxonomic_free_23S.csv", sep = ";", header = TRUE)
+testMol23S_TF <- t(Mol23S_TF %>% select(AIG0121:LEM1821))
+colnames(testMol23S_TF) <- Mol23S_TF$X
+testMol23S_TF <-as.data.frame(testMol23S_TF)
+```
+# Principal Component Analysis
+```{r, eval = FALSE}
+pcamicro <- dudi.pca(testMicro, scannf = FALSE, nf = 2)
+pcaMol23 <- dudi.pca(testMol23s, scannf = FALSE, nf = 2)
+pcaMol16 <- dudi.pca (testMol16s, scannf = FALSE, nf = 2)
+pcaMol23_TF <- dudi.pca (testMol23S_TF, scannf = FALSE, nf = 2)
+pcaMol16_TF <- dudi.pca (testMol16S_TF, scannf = FALSE, nf = 2)
+```
+# Co-inertia Analysis
+```{r, eval = FALSE}
+## Assigned data
+coi_MO16S <- coinertia(dudiX = pcamicro, dudiY = pcaMol16, scannf = FALSE, nf = 2)
+coi_MO23S <- coinertia(dudiX = pcamicro, dudiY = pcaMol23, scannf = FALSE, nf = 2)
+## Taxonomy-free data
+coi_MO16S_TF <- coinertia(dudiX = pcamicro, dudiY = pcaMol16_TF, scannf = FALSE, nf = 2)
+coi_MO23S_TF <- coinertia(dudiX = pcamicro, dudiY = pcaMol23_TF, scannf = FALSE, nf = 2)
+```
+# Variance explained in co-inertia analysis 
+```{r, eval = FALSE}
+## Assigned data
+coi_MO16S$eig[c(1:2)] / sum(coi_MO16S$eig)
+coi_MO23S$eig[c(1:2)] / sum(coi_MO23S$eig)
+## Taxonomy-free data
+coi_MO16S_TF$eig[c(1:2)] / sum(coi_MO16S_TF$eig)
+coi_MO23S_TF$eig[c(1:2)] / sum(coi_MO23S_TF$eig)
+```
+# Permutation test to evaluate de significance of the association between two tables
+```{r, eval = FALSE}
+## Assigned data
+eig.test_Micro16S <- randtest(x = coi_MO16S, nrepet = 9999)
+eig.test_Micro23S <- randtest(x = coi_MO23S, nrepet = 9999)
+## Taxonomy-free data
+eig.test_Micro16S_TF <- randtest(x = coi_MO16S_TF, nrepet = 9999)
+eig.test_Micro23S_TF <- randtest(x = coi_MO23S_TF, nrepet = 9999)
+```
+# Calculate the Euclidean distances in the factorial plan of co-inertia analysis
+```{r, eval = FALSE}
+## Assigned data
+df_MO16S <- data.frame(x1 = coi_MO16S$mX$NorS1, y1 = coi_MO16S$mX$NorS2,
+                 x2 = coi_MO16S$mY$NorS1, y2 = coi_MO16S$mY$NorS2)
+rownames(df_MO16S) <- rownames(coi_MO16S$mX)
+df_MO16S$euclid_dist <- sqrt((df_MO16S$x2 - df_MO16S$x1)^2 + (df_MO16S$y2 - df_MO16S$y1)^2)
+df_MO23S <- data.frame(x1 = coi_MO23S$mX$NorS1, y1 = coi_MO23S$mX$NorS2,
+                 x2 = coi_MO23S$mY$NorS1, y2 = coi_MO23S$mY$NorS2)
+rownames(df_MO23S) <- rownames(coi_MO23S$mX)
+df_MO23S$euclid_dist <- sqrt((df_MO23S$x2 - df_MO23S$x1)^2 + (df_MO23S$y2 - df_MO23S$y1)^2)
+## Taxonomy-free data
+df_MO16S_TF <- data.frame(x1 = coi_MO16S_TF$mX$NorS1, y1 = coi_MO16S_TF$mX$NorS2,
+                 x2 = coi_MO16S_TF$mY$NorS1, y2 = coi_MO16S_TF$mY$NorS2)
+rownames(df_MO16S_TF) <- rownames(coi_MO16S_TF$mX)
+df_MO16S_TF$euclid_dist <- sqrt((df_MO16S_TF$x2 - df_MO16S_TF$x1)^2 + (df_MO16S_TF$y2 - df_MO16S_TF$y1)^2)
+df_MO23S_TF <- data.frame(x1 = coi_MO23S_TF$mX$NorS1, y1 = coi_MO23S_TF$mX$NorS2,
+                 x2 = coi_MO23S_TF$mY$NorS1, y2 = coi_MO23S_TF$mY$NorS2)
+rownames(df_MO23S_TF) <- rownames(coi_MO23S_TF$mX)
+df_MO23S_TF$euclid_dist <- sqrt((df_MO23S_TF$x2 - df_MO23S_TF$x1)^2 + (df_MO23S_TF$y2 - df_MO23S_TF$y1)^2)
+## Merge all tables into one
+eucli_dist <- data.frame(df_MO16S$euclid_dist, df_MO16S_TF$euclid_dist,
+                         df_MO23S$euclid_dist, df_MO23S_TF$euclid_dist)
+rownames(eucli_dist)<- rownames(testMicro)
+colnames(eucli_dist) <- c(paste("Microscopy vs. \n 16S rRNA_assign", sep = ""), 
+                          paste("Microscopy vs. \n 16S rRNA_taxafree", sep = ""),
+                          paste("Microscopy vs. \n 23S rRNA_assign", sep = ""),
+                          paste("Microscopy vs. \n 23S rRNA_taxafree", sep = ""))
+## Put table in tidy format
+eucli_dist_tidy <- eucli_dist %>%
+  gather(key = "Approaches", value = "Euclidean distance")
+```
+## Save plots
+```{r, eval = FALSE}
+png("C:/Users/bealric/Documents/PhytoDOM/Paper_PhytoDOM/Maria_Mercedes/Paper/R_euclidean_distance_coia.png", unit = "in", width = 16, height = 10, res = 800)
+## Change the mgp argument: to avoid text overlaps axis
+par(mai = c(1.5, 1.5, 0.5, 1),
+    mgp = c(4.5, 2.5, 0))
+boxplot (`Euclidean distance`~ Approaches, data = eucli_dist_tidy, 
+         las = 1, # to rotate the labels of y axis (2 for x axis)
+         cex.axis = 1.5, 
+         cex.lab = 1.5,
+         ylim = c(0, 1.8),
+         xlab = "")
+text(x= 1, y= 1.8, labels= "a", cex = 1.8)
+text(x= 2, y= 1.8, labels= "a", cex = 1.8)
+text(x= 3, y= 1.8, labels= "a", cex = 1.8)
+text(x= 4, y= 1.8, labels= "a", cex = 1.8)
+dev.off()
+```
+
+# Version of packages used to build this document
+```{r, eval = TRUE, echo = FALSE}
+library(ade4)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(ggplot2)
+sessionInfo()
+```
